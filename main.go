@@ -3,22 +3,22 @@ package main
 import (
 	"fmt"
 	"github.com/eclipse/paho.mqtt.golang"
+	"github.com/ndphu/espresso-commons"
 	"github.com/ndphu/espresso-commons/dao"
 	"github.com/ndphu/espresso-commons/messaging"
 	"github.com/ndphu/espresso-commons/model/device"
 	"github.com/ndphu/espresso-commons/repo"
 	"github.com/ndphu/espresso-device-manager/handler"
+	"github.com/ndphu/espresso-device-manager/monitor"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 	"time"
 )
 
 var (
-	DeviceHelloTopic = "/espresso/device/hello"
-	//Broker                = "tcp://localhost:1883"
-	Broker       = "tcp://19november.freeddns.org:5370"
-	Qos     byte = 1
-	Session *mgo.Session
+	DeviceHelloTopic      = "/espresso/devices/hello"
+	Qos              byte = 1
+	Session          *mgo.Session
 )
 
 func main() {
@@ -32,33 +32,30 @@ func main() {
 	deviceRepo := repo.NewDeviceRepo(Session)
 	textCommandRepo := repo.NewTextCommandRepo(Session)
 	gpioCommandRepo := repo.NewGPIOCommandRepo(Session)
+	deviceStatusRepo := repo.NewDeviceStatusRepo(Session)
 
-	// o := mqtt.NewClientOptions()
-	// o.AddBroker(Broker)
-	// o.SetClientID("espresso-device-service")
-	// o.SetAutoReconnect(false)
-
-	// c := mqtt.NewClient(o)
-
-	// if token := c.Connect(); token.Wait() && token.Error() != nil {
-	// 	panic(token.Error())
-	// }
-
-	// fmt.Println("Connected to broker!")
-
-	msgRouter, err := messaging.NewMessageRouter("19november.freeddns.org", 5370, "", "", fmt.Sprintf("device-manager-%d", time.Now().UnixNano()))
+	msgRouter, err := messaging.NewMessageRouter(commons.BrokerHost, commons.BrokerPort, "", "", fmt.Sprintf("device-manager-%d", time.Now().UnixNano()))
 
 	if err != nil {
 		panic(err)
 	}
 
 	defer msgRouter.Stop()
-
+	// Init handler
 	tch, _ := handler.NewTextCommandHandler(deviceRepo, textCommandRepo, msgRouter)
 	msgRouter.Subscribe(string(messaging.MessageDestination_TextCommand), tch)
 
 	gch, _ := handler.NewGPIOCommandHandler(deviceRepo, gpioCommandRepo, msgRouter)
 	msgRouter.Subscribe(string(messaging.MessageDestination_GPIOCommand), gch)
+
+	// end Init Handler
+
+	// device monitor
+	deviceMonitor := monitor.NewDeviceMonitor(msgRouter, deviceRepo, deviceStatusRepo)
+	deviceMonitor.Start()
+	defer deviceMonitor.Stop()
+	// deviceMonitor.IsDeviceMonitored(id)
+	// end device monitor
 
 	msgc := make(chan mqtt.Message)
 
@@ -74,23 +71,23 @@ func main() {
 		msg := <-msgc
 		fmt.Printf("[%s] %s\n", msg.Topic(), string(msg.Payload()))
 		serial := string(msg.Payload())
-		count, err := dao.CountBy(deviceRepo, bson.M{"serial": serial})
+		d := device.Device{}
+		//count, err := dao.CountBy(deviceRepo, bson.M{"serial": serial})
+		err := dao.FindOne(deviceRepo, bson.M{"serial": serial}, &d)
 		if err != nil {
-			fmt.Println("Fail to query to DB", err)
-		} else {
-			if count == 0 {
-				d := device.Device{
+			if err.Error() == "not found" {
+				d = device.Device{
 					Name:   fmt.Sprintf("Unknow device %d", time.Now().UnixNano()),
 					Serial: serial,
 				}
 				dao.Insert(deviceRepo, &d)
 				fmt.Println("Insert new device with id", d.Id.Hex())
 			} else {
-				fmt.Println("Update device status to online")
+				fmt.Println("Fail to connect to DB", err)
 			}
+		} else {
 
 		}
-
 	}
 
 }

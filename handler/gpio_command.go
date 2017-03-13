@@ -8,8 +8,8 @@ import (
 	"github.com/ndphu/espresso-commons/model/command"
 	"github.com/ndphu/espresso-commons/model/device"
 	"github.com/ndphu/espresso-commons/repo"
-	//"gopkg.in/mgo.v2"
-	"encoding/json"
+	"gopkg.in/mgo.v2/bson"
+	//"encoding/json"
 	"fmt"
 	"log"
 )
@@ -29,14 +29,10 @@ func NewGPIOCommandHandler(dr *repo.DeviceRepo, gcr *repo.GPIOCommandRepo, r *me
 }
 
 func (t *GPIOCommandHandler) OnNewMessage(msg *messaging.Message) {
-	//log.Println("New message")
-	//log.Println(msg.Payload)
-	//tc := msg.Payload.(command.TextCommand)
-	//tc := command.TextCommandFromPayload(msg.Payload)
 	gc := command.GPIOCommand{}
-	err := json.Unmarshal([]byte(msg.Payload), &gc)
+	err := dao.FindById(t.GPIOCommandRepo, bson.ObjectIdHex(string(msg.Payload)), &gc)
 	if err != nil {
-		log.Println("Failed to parse message body", err)
+		log.Println("Failed to get gpio command with id", string(msg.Payload), "error:", err)
 	} else {
 		log.Println("Device id", gc.TargetDeviceId)
 		targetDevice := device.Device{}

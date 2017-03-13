@@ -8,8 +8,7 @@ import (
 	"github.com/ndphu/espresso-commons/model/command"
 	"github.com/ndphu/espresso-commons/model/device"
 	"github.com/ndphu/espresso-commons/repo"
-	//"gopkg.in/mgo.v2"
-	"encoding/json"
+	"gopkg.in/mgo.v2/bson"
 	"log"
 )
 
@@ -28,14 +27,11 @@ func NewTextCommandHandler(dr *repo.DeviceRepo, tcr *repo.TextCommandRepo, r *me
 }
 
 func (t *TextCommandHandler) OnNewMessage(msg *messaging.Message) {
-	//log.Println("New message")
-	//log.Println(msg.Payload)
-	//tc := msg.Payload.(command.TextCommand)
-	//tc := command.TextCommandFromPayload(msg.Payload)
+	tcId := string(msg.Payload)
 	tc := command.TextCommand{}
-	err := json.Unmarshal([]byte(msg.Payload), &tc)
+	err := dao.FindById(t.TextCommandRepo, bson.ObjectIdHex(tcId), &tc)
 	if err != nil {
-		log.Println("Failed to parse message body", err)
+		log.Println("Failed to get text command with id", tcId, "error:", err)
 	} else {
 		log.Println("Device id", tc.TargetDeviceId)
 		targetDevice := device.Device{}
@@ -44,8 +40,6 @@ func (t *TextCommandHandler) OnNewMessage(msg *messaging.Message) {
 			log.Println("Cannot get device from text command", err)
 		} else {
 			deviceSerial := targetDevice.Serial
-			// TODO support multiple message broker
-			// right now use a single one and hardcodded
 			topic := commons.GetCommandTopicFromSerial(deviceSerial)
 			log.Println("Publish to", topic)
 			token := t.client.Publish(topic, commons.DefaultToDeviceQos, false, tc.Text)
