@@ -10,30 +10,33 @@ import (
 	"github.com/ndphu/espresso-commons/model/device"
 	"github.com/ndphu/espresso-commons/repo"
 	"gopkg.in/mgo.v2/bson"
+	"sync"
 	"time"
 )
 
 type DeviceMonitor struct {
-	client             mqtt.Client
-	messageRouter      *messaging.MessageRouter
-	deviceRepo         *repo.DeviceRepo
-	deviceStatusRepo   *repo.DeviceStatusRepo
-	monitoringDevices  map[string]bool
-	running            bool
-	monitoringInterval int
-	offlineInterval    int
+	client                mqtt.Client
+	messageRouter         *messaging.MessageRouter
+	deviceRepo            *repo.DeviceRepo
+	deviceStatusRepo      *repo.DeviceStatusRepo
+	monitoringDevices     map[string]bool
+	running               bool
+	monitoringInterval    int
+	offlineInterval       int
+	monitoringDevicesLock sync.Mutex
 }
 
 func NewDeviceMonitor(msgr *messaging.MessageRouter, dr *repo.DeviceRepo, dsr *repo.DeviceStatusRepo) *DeviceMonitor {
 	monitor := DeviceMonitor{
-		client:             msgr.GetMQTTClient(),
-		messageRouter:      msgr,
-		deviceRepo:         dr,
-		deviceStatusRepo:   dsr,
-		monitoringDevices:  make(map[string]bool),
-		running:            true,
-		monitoringInterval: 30,
-		offlineInterval:    120,
+		client:                msgr.GetMQTTClient(),
+		messageRouter:         msgr,
+		deviceRepo:            dr,
+		deviceStatusRepo:      dsr,
+		monitoringDevices:     make(map[string]bool),
+		running:               true,
+		monitoringInterval:    30,
+		offlineInterval:       120,
+		monitoringDevicesLock: sync.Mutex{},
 	}
 
 	msgr.Subscribe(string(messaging.MessageDestination_DeviceUpdated), &monitor)
@@ -68,7 +71,9 @@ func (d *DeviceMonitor) OnNewMessage(msg *messaging.Message) {
 }
 
 func (d *DeviceMonitor) IsDeviceMonitored(id string) bool {
+	d.monitoringDevicesLock.Lock()
 	_, exists := d.monitoringDevices[id]
+	d.monitoringDevicesLock.Unlock()
 	return exists
 }
 
@@ -147,6 +152,7 @@ func (d *DeviceMonitor) MessageHandler(msg mqtt.Message) {
 }
 
 func (d *DeviceMonitor) MonitorDevice(dv *device.Device) {
+	d.monitoringDevicesLock.Lock()
 	healthTopic := fmt.Sprintf("/espresso/device/%s/health", dv.Serial)
 	fmt.Println("Subscribe to health topic", healthTopic)
 	if token := d.client.Subscribe(healthTopic, commons.DefaultToDeviceQos, func(client mqtt.Client, msg mqtt.Message) {
@@ -156,9 +162,11 @@ func (d *DeviceMonitor) MonitorDevice(dv *device.Device) {
 	} else {
 		d.monitoringDevices[dv.Id.Hex()] = true
 	}
+	d.monitoringDevicesLock.Unlock()
 }
 
 func (d *DeviceMonitor) StopMonitorDevice(dv *device.Device) {
+	d.monitoringDevicesLock.Lock()
 	healthTopic := fmt.Sprintf("/espresso/device/%s/health", dv.Serial)
 	fmt.Println("Unsubscribe to health topic", healthTopic)
 	if token := d.client.Unsubscribe(healthTopic); token.Wait() && token.Error() != nil {
@@ -166,6 +174,7 @@ func (d *DeviceMonitor) StopMonitorDevice(dv *device.Device) {
 	} else {
 		d.monitoringDevices[dv.Id.Hex()] = false
 	}
+	d.monitoringDevicesLock.Unlock()
 }
 
 func (d *DeviceMonitor) Start() {
