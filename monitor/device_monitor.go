@@ -55,6 +55,7 @@ func (d *DeviceMonitor) OnNewMessage(msg *messaging.Message) {
 		} else {
 			switch msg.Type {
 			case messaging.MessageType_DeviceAdded:
+			case messaging.MessageType_DeviceUpdated:
 				if !d.IsDeviceMonitored(deviceId) {
 					d.MonitorDevice(&dv)
 				}
