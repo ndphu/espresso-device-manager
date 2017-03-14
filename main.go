@@ -81,13 +81,26 @@ func main() {
 					Serial: serial,
 				}
 				dao.Insert(deviceRepo, &d)
-				fmt.Println("Insert new device with id", d.Id.Hex())
+				fmt.Println("Inserted new device with id", d.Id.Hex())
+				//msgRouter.Publish(msg)
+				publishDeviceAddedEvent(msgRouter, &d)
 			} else {
-				fmt.Println("Fail to connect to DB", err)
+				fmt.Println("Insert device failed", err)
 			}
 		} else {
-
+			// device already added to DB
 		}
 	}
 
+}
+
+func publishDeviceAddedEvent(msgr *messaging.MessageRouter, dv *device.Device) {
+	msg := messaging.Message{
+		Destination: messaging.MessageDestination_DeviceUpdated,
+		Source:      messaging.MessageSource_DeviceManager,
+		Payload:     dv.Id.Hex(),
+		Type:        messaging.MessageType_DeviceAdded,
+	}
+
+	msgr.Publish(msg)
 }
