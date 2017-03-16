@@ -39,14 +39,14 @@ func NewDeviceMonitor(msgr *messaging.MessageRouter, dr *repo.DeviceRepo, dsr *r
 		monitoringDevicesLock: sync.Mutex{},
 	}
 
-	msgr.Subscribe(string(messaging.MessageDestination_DeviceUpdated), &monitor)
+	msgr.Subscribe(string(messaging.IPCDevice), &monitor)
 
 	return &monitor
 }
 
 func (d *DeviceMonitor) OnNewMessage(msg *messaging.Message) {
 	// only handle message from UI
-	if msg.Source == messaging.MessageSource_UI {
+	if msg.Source == messaging.UI {
 		deviceId := msg.Payload
 		var dv device.Device
 		err := dao.FindById(d.deviceRepo, bson.ObjectIdHex(deviceId), &dv)
@@ -54,13 +54,13 @@ func (d *DeviceMonitor) OnNewMessage(msg *messaging.Message) {
 			fmt.Println(err)
 		} else {
 			switch msg.Type {
-			case messaging.MessageType_DeviceAdded:
-			case messaging.MessageType_DeviceUpdated:
+			case messaging.DeviceAdded:
+			case messaging.DeviceUpdated:
 				if !d.IsDeviceMonitored(deviceId) {
 					d.MonitorDevice(&dv)
 				}
 				break
-			case messaging.MessageType_DeviceRemoved:
+			case messaging.DeviceRemoved:
 				if d.IsDeviceMonitored(deviceId) {
 					d.StopMonitorDevice(&dv)
 				}
@@ -89,23 +89,24 @@ func (d *DeviceMonitor) insertDeviceStatus(ds *device.DeviceStatus) error {
 	}
 }
 
+// Publish Device online/offline to device ipc topic
 func (d *DeviceMonitor) publishDeviceUpdateEvent(dv *device.Device, online bool) {
 	msg := messaging.Message{
-		Destination: messaging.MessageDestination_DeviceUpdated,
+		Destination: messaging.IPCDevice,
 		Payload:     dv.Id.Hex(),
-		Source:      messaging.MessageSource_DeviceManager,
-		//Type:        messaging.MessageType_DeviceUpdated,
+		Source:      messaging.DeviceManager,
 	}
 
 	if online {
-		msg.Type = messaging.MessageType_DeviceOnline
+		msg.Type = messaging.DeviceOnline
 	} else {
-		msg.Type = messaging.MessageType_DeviceOffline
+		msg.Type = messaging.DeviceOffline
 	}
 
 	d.messageRouter.Publish(msg)
 }
 
+// Process the new device status record to update the device's status
 func (d *DeviceMonitor) updateDeviceOnStatusChanged(ds *device.DeviceStatus) error {
 	dv := device.Device{}
 	err := dao.FindOne(d.deviceRepo, bson.M{"serial": ds.Serial}, &dv)

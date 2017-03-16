@@ -20,15 +20,15 @@ type GPIOCommandHandler struct {
 	client          mqtt.Client
 }
 
-func NewGPIOCommandHandler(dr *repo.DeviceRepo, gcr *repo.GPIOCommandRepo, r *messaging.MessageRouter) (*GPIOCommandHandler, error) {
+func NewGPIOCommandHandler(dr *repo.DeviceRepo, gcr *repo.GPIOCommandRepo, r *messaging.MessageRouter) *GPIOCommandHandler {
 	return &GPIOCommandHandler{
 		DeviceRepo:      dr,
 		GPIOCommandRepo: gcr,
 		client:          r.GetMQTTClient(),
-	}, nil
+	}
 }
 
-func (t *GPIOCommandHandler) OnNewMessage(msg *messaging.Message) {
+func (t *GPIOCommandHandler) HandleMessage(msg *messaging.Message) {
 	gc := command.GPIOCommand{}
 	err := dao.FindById(t.GPIOCommandRepo, bson.ObjectIdHex(string(msg.Payload)), &gc)
 	if err != nil {

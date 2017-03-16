@@ -18,15 +18,15 @@ type TextCommandHandler struct {
 	client          mqtt.Client
 }
 
-func NewTextCommandHandler(dr *repo.DeviceRepo, tcr *repo.TextCommandRepo, r *messaging.MessageRouter) (*TextCommandHandler, error) {
+func NewTextCommandHandler(dr *repo.DeviceRepo, tcr *repo.TextCommandRepo, r *messaging.MessageRouter) *TextCommandHandler {
 	return &TextCommandHandler{
 		DeviceRepo:      dr,
 		TextCommandRepo: tcr,
 		client:          r.GetMQTTClient(),
-	}, nil
+	}
 }
 
-func (t *TextCommandHandler) OnNewMessage(msg *messaging.Message) {
+func (t *TextCommandHandler) HandleMessage(msg *messaging.Message) {
 	tcId := string(msg.Payload)
 	tc := command.TextCommand{}
 	err := dao.FindById(t.TextCommandRepo, bson.ObjectIdHex(tcId), &tc)

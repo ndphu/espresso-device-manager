@@ -42,12 +42,9 @@ func main() {
 
 	defer msgRouter.Stop()
 	// Init handler
-	tch, _ := handler.NewTextCommandHandler(deviceRepo, textCommandRepo, msgRouter)
-	msgRouter.Subscribe(string(messaging.MessageDestination_TextCommand), tch)
-
-	gch, _ := handler.NewGPIOCommandHandler(deviceRepo, gpioCommandRepo, msgRouter)
-	msgRouter.Subscribe(string(messaging.MessageDestination_GPIOCommand), gch)
-
+	commandHandler := handler.NewCommandHandler(deviceRepo, textCommandRepo, gpioCommandRepo, msgRouter)
+	msgRouter.Subscribe(string(messaging.IPCCommand), commandHandler)
+	defer msgRouter.Unsubscribe(string(messaging.IPCCommand), commandHandler)
 	// end Init Handler
 
 	// device monitor
@@ -96,10 +93,10 @@ func main() {
 
 func publishDeviceAddedEvent(msgr *messaging.MessageRouter, dv *device.Device) {
 	msg := messaging.Message{
-		Destination: messaging.MessageDestination_DeviceUpdated,
-		Source:      messaging.MessageSource_DeviceManager,
+		Destination: messaging.IPCDevice,
+		Source:      messaging.DeviceManager,
 		Payload:     dv.Id.Hex(),
-		Type:        messaging.MessageType_DeviceAdded,
+		Type:        messaging.DeviceAdded,
 	}
 
 	msgr.Publish(msg)
