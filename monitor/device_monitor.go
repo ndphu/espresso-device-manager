@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/eclipse/paho.mqtt.golang"
-	"github.com/ndphu/espresso-commons"
 	"github.com/ndphu/espresso-commons/dao"
 	"github.com/ndphu/espresso-commons/messaging"
 	"github.com/ndphu/espresso-commons/model/device"
@@ -12,6 +11,11 @@ import (
 	"gopkg.in/mgo.v2/bson"
 	"sync"
 	"time"
+)
+
+var (
+	DefaultQos         byte   = 1
+	DevicesHealthTopic string = "/esp/devices/health"
 )
 
 type DeviceMonitor struct {
@@ -107,23 +111,18 @@ func (d *DeviceMonitor) publishDeviceUpdateEvent(dv *device.Device, online bool)
 }
 
 // Process the new device status record to update the device's status
-func (d *DeviceMonitor) updateDeviceOnStatusChanged(ds *device.DeviceStatus) error {
-	dv := device.Device{}
-	err := dao.FindOne(d.deviceRepo, bson.M{"serial": ds.Serial}, &dv)
-	if err != nil {
-		return err
-	} else {
-		//dv.Online = true
-		if dv.Online != ds.Online {
-			dv.Online = ds.Online
-			err := dao.Update(d.deviceRepo, &dv)
-			if err != nil {
-				return err
-			}
-			d.publishDeviceUpdateEvent(&dv, ds.Online)
+func (d *DeviceMonitor) updateDeviceOnStatusChanged(dv *device.Device, ds *device.DeviceStatus) error {
+
+	//dv.Online = true
+	if dv.Online != ds.Online {
+		dv.Online = ds.Online
+		err := dao.Update(d.deviceRepo, dv)
+		if err != nil {
+			return err
 		}
-		return nil
+		d.publishDeviceUpdateEvent(dv, ds.Online)
 	}
+	return nil
 }
 
 func (d *DeviceMonitor) IsDeviceStillOnline(dv *device.Device) bool {
@@ -139,89 +138,115 @@ func (d *DeviceMonitor) IsDeviceStillOnline(dv *device.Device) bool {
 	}
 }
 
-func (d *DeviceMonitor) MessageHandler(msg mqtt.Message) {
-	fmt.Println("[", msg.Topic(), "]", string(msg.Payload()))
-
-	ds := device.DeviceStatus{}
-	err := json.Unmarshal(msg.Payload(), &ds)
-	if err != nil {
-		fmt.Println("Cannot parse device health message", err)
-	} else {
-		ds.Online = true
-		d.insertDeviceStatus(&ds)
-		d.updateDeviceOnStatusChanged(&ds)
-	}
-}
-
 func (d *DeviceMonitor) MonitorDevice(dv *device.Device) {
 	d.monitoringDevicesLock.Lock()
-	healthTopic := fmt.Sprintf("/espresso/device/%s/health", dv.Serial)
-	fmt.Println("Subscribe to health topic", healthTopic)
-	if token := d.client.Subscribe(healthTopic, commons.DefaultToDeviceQos, func(client mqtt.Client, msg mqtt.Message) {
-		d.MessageHandler(msg)
-	}); token.Wait() && token.Error() != nil {
-		fmt.Println("Fail to monitor device", dv.Name, "error:", token.Error())
-	} else {
-		d.monitoringDevices[dv.Id.Hex()] = true
-	}
+	d.monitoringDevices[dv.Id.Hex()] = true
 	d.monitoringDevicesLock.Unlock()
 }
 
 func (d *DeviceMonitor) StopMonitorDevice(dv *device.Device) {
 	d.monitoringDevicesLock.Lock()
-	healthTopic := fmt.Sprintf("/espresso/device/%s/health", dv.Serial)
-	fmt.Println("Unsubscribe to health topic", healthTopic)
-	if token := d.client.Unsubscribe(healthTopic); token.Wait() && token.Error() != nil {
-		fmt.Println("Fail to unsubscribe device", dv.Name, "error:", token.Error())
-	} else {
-		d.monitoringDevices[dv.Id.Hex()] = false
-	}
+	d.monitoringDevices[dv.Id.Hex()] = false
 	d.monitoringDevicesLock.Unlock()
 }
 
-func (d *DeviceMonitor) Start() {
-	d.running = true
-	go func() {
-		for d.running {
-			fmt.Println("======= Monitoring thread started =======")
-			devices := make([]device.Device, 0)
-			dao.FindAll(d.deviceRepo, bson.M{"managed": true, "deleted": false}, 0, 999, &devices)
-			for i := 0; i < len(devices); i++ {
-				dv := devices[i]
-				fmt.Println("Checking device >>>", dv.Name)
-				//d.MonitorDevice(device)
-				if !d.IsDeviceMonitored(dv.Id.Hex()) {
-					d.MonitorDevice(&dv)
-					fmt.Println("Started monitoring thread")
+func (d *DeviceMonitor) Run() {
+	msgc := make(chan mqtt.Message)
+
+	if token := d.client.Subscribe(DevicesHealthTopic, DefaultQos, func(c mqtt.Client, msg mqtt.Message) {
+		msgc <- msg
+	}); token.Wait() && token.Error() != nil {
+		panic(token.Error())
+	}
+
+	fmt.Println("Subscribed to", DevicesHealthTopic)
+	go d.startMonitoring()
+	for {
+		msg := <-msgc
+		fmt.Printf("[%s] %s\n", msg.Topic(), string(msg.Payload()))
+		deviceStatus := device.DeviceStatus{}
+		err := json.Unmarshal(msg.Payload(), &deviceStatus)
+		if err != nil {
+			fmt.Println("Fail to parse device status", err)
+		} else {
+			err := d.insertDeviceStatus(&deviceStatus)
+			if err != nil {
+				fmt.Println("Fail to insert device status", err)
+			} else {
+				dv := device.Device{}
+				// select a device with serial, and also not marked as deleted
+				err := dao.FindOne(d.deviceRepo, bson.M{"serial": deviceStatus.Serial, "deleted": false}, &dv)
+				if err != nil && err.Error() == "not found" {
+					dv = device.Device{
+						Name:   fmt.Sprintf("Unknow device %d", time.Now().Unix()),
+						Serial: deviceStatus.Serial,
+					}
+					dao.Insert(d.deviceRepo, &dv)
+					fmt.Println("Inserted new device with id", dv.Id.Hex())
+					publishDeviceAddedEvent(d.messageRouter, &dv)
+				} else {
+					deviceStatus.Online = true
+					d.updateDeviceOnStatusChanged(&dv, &deviceStatus)
 				}
-				if dv.Online {
-					// check online status
-					if !d.IsDeviceStillOnline(&dv) {
-						fmt.Println("Updating device status to offline")
-						offlineStatus := device.DeviceStatus{
-							Uptime: -1,
-							Serial: dv.Serial,
-							Free:   -1,
-							Online: false,
-						}
-						err := d.insertDeviceStatus(&offlineStatus)
+			}
+
+		}
+
+	}
+}
+
+func (d *DeviceMonitor) startMonitoring() {
+	d.running = true
+	for d.running {
+		fmt.Println("======= Monitoring thread started =======")
+		devices := make([]device.Device, 0)
+		dao.FindAll(d.deviceRepo, bson.M{"managed": true, "deleted": false}, 0, 999, &devices)
+		for i := 0; i < len(devices); i++ {
+			dv := devices[i]
+			fmt.Println("Checking device >>>", dv.Name)
+			//d.MonitorDevice(device)
+			if !d.IsDeviceMonitored(dv.Id.Hex()) {
+				d.MonitorDevice(&dv)
+				fmt.Println("Started monitoring thread")
+			}
+			if dv.Online {
+				// check online status
+				if !d.IsDeviceStillOnline(&dv) {
+					fmt.Println("Updating device status to offline")
+					offlineStatus := device.DeviceStatus{
+						Uptime: -1,
+						Serial: dv.Serial,
+						Free:   -1,
+						Online: false,
+					}
+					err := d.insertDeviceStatus(&offlineStatus)
+					if err != nil {
+						fmt.Println("Create offline status failed", err)
+					} else {
+						err = d.updateDeviceOnStatusChanged(&dv, &offlineStatus)
 						if err != nil {
-							fmt.Println("Create offline status failed", err)
-						} else {
-							err = d.updateDeviceOnStatusChanged(&offlineStatus)
-							if err != nil {
-								fmt.Println("Update device status failed", err)
-							}
+							fmt.Println("Update device status failed", err)
 						}
 					}
 				}
 			}
-			fmt.Println("======= Monitoring thread finished =======")
-			time.Sleep(time.Duration(d.monitoringInterval) * time.Second)
 		}
-	}()
+		fmt.Println("======= Monitoring thread finished =======")
+		time.Sleep(time.Duration(d.monitoringInterval) * time.Second)
+	}
 }
 
 func (d *DeviceMonitor) Stop() {
 	d.running = false
+}
+
+func publishDeviceAddedEvent(msgr *messaging.MessageRouter, dv *device.Device) {
+	msg := messaging.Message{
+		Destination: messaging.IPCDevice,
+		Source:      messaging.DeviceManager,
+		Payload:     dv.Id.Hex(),
+		Type:        messaging.DeviceAdded,
+	}
+
+	msgr.Publish(msg)
 }

@@ -33,7 +33,6 @@ func (t *TextCommandHandler) HandleMessage(msg *messaging.Message) {
 	if err != nil {
 		log.Println("Failed to get text command with id", tcId, "error:", err)
 	} else {
-		log.Println("Device id", tc.TargetDeviceId)
 		targetDevice := device.Device{}
 		err = dao.FindById(t.DeviceRepo, tc.TargetDeviceId, &targetDevice)
 		if err != nil {
