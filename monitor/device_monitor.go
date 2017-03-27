@@ -112,16 +112,13 @@ func (d *DeviceMonitor) publishDeviceUpdateEvent(dv *device.Device, online bool)
 
 // Process the new device status record to update the device's status
 func (d *DeviceMonitor) updateDeviceOnStatusChanged(dv *device.Device, ds *device.DeviceStatus) error {
-
-	//dv.Online = true
-	if dv.Online != ds.Online {
-		dv.Online = ds.Online
-		err := dao.Update(d.deviceRepo, dv)
-		if err != nil {
-			return err
-		}
-		d.publishDeviceUpdateEvent(dv, ds.Online)
+	dv.Status = *ds
+	err := dao.Update(d.deviceRepo, dv)
+	if err != nil {
+		return err
 	}
+	d.publishDeviceUpdateEvent(dv, ds.Online)
+
 	return nil
 }
 
@@ -177,13 +174,18 @@ func (d *DeviceMonitor) Run() {
 				// select a device with serial, and also not marked as deleted
 				err := dao.FindOne(d.deviceRepo, bson.M{"serial": deviceStatus.Serial, "deleted": false}, &dv)
 				if err != nil && err.Error() == "not found" {
-					dv = device.Device{
+					newDevice := device.Device{
 						Name:   fmt.Sprintf("Unknow device %d", time.Now().Unix()),
 						Serial: deviceStatus.Serial,
+						Status: deviceStatus,
 					}
-					dao.Insert(d.deviceRepo, &dv)
-					fmt.Println("Inserted new device with id", dv.Id.Hex())
-					publishDeviceAddedEvent(d.messageRouter, &dv)
+					err := dao.Insert(d.deviceRepo, &newDevice)
+					if err != nil {
+						fmt.Println("Error", err)
+					} else {
+						fmt.Println("Inserted new device with id", newDevice.Id.Hex())
+						publishDeviceAddedEvent(d.messageRouter, &newDevice)
+					}
 				} else {
 					deviceStatus.Online = true
 					d.updateDeviceOnStatusChanged(&dv, &deviceStatus)
@@ -209,7 +211,7 @@ func (d *DeviceMonitor) startMonitoring() {
 				d.MonitorDevice(&dv)
 				fmt.Println("Started monitoring thread")
 			}
-			if dv.Online {
+			if dv.Status.Online {
 				// check online status
 				if !d.IsDeviceStillOnline(&dv) {
 					fmt.Println("Updating device status to offline")
